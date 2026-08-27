@@ -1,0 +1,58 @@
+{
+    "name": "@elysia/compress",
+    "version": "2.0.0-beta.1",
+    "description": "Elysia plugin for response compression",
+    "license": "MIT",
+    "files": [
+        "dist"
+    ],
+    "scripts": {
+        "dev": "bun run --watch example/index.ts",
+        "test": "bun test && npm run test:node",
+        "test:node": "npm run build && npm install --prefix test/node && node test/node/cjs.cjs && node test/node/esm.mjs",
+        "build": "bun build.ts",
+        "release": "npm run build && npm run test && npm publish --access public"
+    },
+    "peerDependencies": {
+        "elysia": ">= 2.0.0-beta.7"
+    },
+    "devDependencies": {
+        "@elysia/static": "^2.0.0-beta.2",
+        "@types/bun": "^1.4.0",
+        "elysia": "2.0.0-beta.7",
+        "tsdown": "^0.22.3",
+        "typescript": "^5.9.3"
+    },
+    "main": "./dist/index.js",
+    "module": "./dist/index.mjs",
+    "types": "./dist/index.d.ts",
+    "exports": {
+        "./package.json": "./package.json",
+        ".": {
+            "types": "./dist/index.d.ts",
+            "import": "./dist/index.mjs",
+            "require": "./dist/index.js"
+        }
+    },
+    "keywords": [
+        "elysia",
+        "compress",
+        "compression",
+        "gzip",
+        "zstd",
+        "br",
+        "brotli",
+        "deflate"
+    ],
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/elysiajs/elysia-compress"
+    },
+    "author": {
+        "name": "saltyAom",
+        "url": "https://github.com/SaltyAom",
+        "email": "saltyaom@gmail.com"
+    },
+    "homepage": "https://github.com/elysiajs/elysia-compress",
+    "bugs": "https://github.com/elysiajs/elysia-compress/issues"
+}

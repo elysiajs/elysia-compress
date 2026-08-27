@@ -1,0 +1,35 @@
+name: Publish
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  id-token: write
+
+jobs:
+  npm:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        package: ['@elysia/compress', '@elysiajs/compress']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: latest
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '24.x'
+          registry-url: https://registry.npmjs.org
+
+      - run: bun install --frozen-lockfile
+      - run: bun run build
+      - run: bun run test
+      - run: npm pkg set name=${{ matrix.package }}
+      - run: npm publish --provenance --access=public
+        env:
+          NODE_AUTH_TOKEN: ''
