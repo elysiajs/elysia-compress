@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'bun:test'
 import zlib from 'node:zlib'
 
-import { Elysia, type AnyElysia } from 'elysia'
+import { borrow, Elysia, type AnyElysia } from 'elysia'
 import { autoHead } from 'elysia/auto-head'
 import { websocket } from 'elysia/websocket'
 import { staticPlugin } from '@elysia/static'
@@ -276,7 +276,7 @@ describe('compress', () => {
 		expect(pulled).toBe(true)
 	})
 
-	it('compresses streams unless streams is false', async () => {
+	it('compresses streams unless stream is false', async () => {
 		const stream = () =>
 			new Response(
 				new ReadableStream({
@@ -299,7 +299,7 @@ describe('compress', () => {
 		expect(await decode(compressed)).toBe(body)
 
 		const disabled = new Elysia()
-			.use(compress({ streams: false }))
+			.use(compress({ stream: false }))
 			.get('/', stream)
 		const plain = await request(disabled, '/', 'gzip')
 		expect(plain.headers.get('content-encoding')).toBeNull()
@@ -340,10 +340,16 @@ describe('compress', () => {
 		expect(await decode(response)).toBe(body)
 	})
 
-	it('keeps cached Response bodies reusable', async () => {
-		const cached = new Response(body, {
-			headers: { 'content-type': 'text/plain' }
-		})
+	// borrow() is the sanctioned way to reuse a Response instance across
+	// requests: core clones it fresh per request (the borrowed clone isn't
+	// itself in the borrowed set, so compress consumes it directly instead
+	// of cloning a second time), leaving the original's body untouched.
+	it('keeps a borrowed cached Response reusable', async () => {
+		const cached = borrow(
+			new Response(body, {
+				headers: { 'content-type': 'text/plain' }
+			})
+		)
 		const app = new Elysia().use(compress()).get('/', () => cached)
 
 		for (const encoding of ['gzip', 'br', 'gzip']) {
@@ -352,6 +358,28 @@ describe('compress', () => {
 			expect(response.headers.get('content-encoding')).toBe(encoding)
 			expect(await decode(response)).toBe(body)
 		}
+
+		expect(cached.bodyUsed).toBe(false)
+	})
+
+	// Without borrow(), core hands compress the SAME instance every request
+	// (owned=true, not explicitly borrowed → no defensive clone at the
+	// core layer either). compress consumes it directly on request 1; core's
+	// own reuse guard then throws on request 2 rather than silently serving
+	// stale or corrupted content. If this test starts passing, someone
+	// reintroduced clone-by-default and quietly ate the perf win.
+	it('surfaces an error on the second request for an unborrowed cached Response', async () => {
+		const cached = new Response(body, {
+			headers: { 'content-type': 'text/plain' }
+		})
+		const app = new Elysia().use(compress()).get('/', () => cached)
+
+		const first = await request(app, '/', 'gzip')
+		expect(first.headers.get('content-encoding')).toBe('gzip')
+		expect(await decode(first)).toBe(body)
+
+		const second = await request(app, '/', 'gzip')
+		expect(second.status).toBe(500)
 	})
 
 	it('compresses error, not-found, and mapped responses', async () => {
@@ -610,6 +638,97 @@ describe('compress', () => {
 
 		expect(response.headers.get('content-encoding')).toBe('gzip')
 		expect(await decode(response)).toBe(body)
+	})
+
+	// Pins that oversized buffered bodies still compress correctly through
+	// the streaming lane instead of the blocking one-shot: past
+	// ONE_SHOT_LIMIT, oneShots is skipped even when available and the
+	// existing pipe-from-bytes path takes over.
+	it('compresses an oversized buffered body through the streaming lane', async () => {
+		const large = 'a'.repeat(2 * 1024 * 1024)
+		const app = new Elysia().use(compress()).get('/', () => large)
+		const response = await request(app, '/', 'gzip')
+
+		expect(response.headers.get('content-encoding')).toBe('gzip')
+		expect(await decode(response)).toBe(large)
+	})
+
+	// A `.wrap()` registered after compress() composes closer to the handler
+	// (compress() registered its own wrap first via `.use()`, so it's the
+	// outer layer; this one sees the pre-compression Response compress
+	// itself will act on). A plain mapper-constructed response isn't
+	// borrowed, so compress must consume it directly instead of cloning —
+	// this is the only way to observe that from the outside, since the
+	// compressed output looks identical either way. For the borrow() lane,
+	// core hands compress a fresh clone (never the borrowed original, so
+	// isBorrowedResponse reads false on it too) — that clone is what gets
+	// consumed, while the original stays untouched for the next request.
+	it('consumes an owned response directly but clones a borrowed one at the core layer', async () => {
+		const capture = (bucket: Response[]) =>
+			(handle: (request: Request, server?: unknown) => unknown) =>
+				(request: Request, server?: unknown) => {
+					const result = handle(request, server)
+
+					if (result instanceof Promise)
+						return result.then((response) => {
+							if (response instanceof Response) bucket.push(response)
+							return response
+						})
+
+					if (result instanceof Response) bucket.push(result)
+					return result
+				}
+
+		const fresh: Response[] = []
+		const freshApp = new Elysia()
+			.use(compress())
+			.wrap(capture(fresh) as never)
+			.get('/', () => body)
+
+		const freshResponse = await request(freshApp, '/', 'gzip')
+		expect(freshResponse.headers.get('content-encoding')).toBe('gzip')
+		expect(fresh[0]?.bodyUsed).toBe(true)
+
+		const cachedBucket: Response[] = []
+		const cached = borrow(
+			new Response(body, {
+				headers: { 'content-type': 'text/plain' }
+			})
+		)
+		const cachedApp = new Elysia()
+			.use(compress())
+			.wrap(capture(cachedBucket) as never)
+			.get('/', () => cached)
+
+		const cachedResponse = await request(cachedApp, '/', 'gzip')
+		expect(cachedResponse.headers.get('content-encoding')).toBe('gzip')
+		// what the spy saw is core's fresh per-request clone, not `cached`
+		expect(cachedBucket[0]).not.toBe(cached)
+		expect(cachedBucket[0]?.bodyUsed).toBe(true)
+		expect(cached.bodyUsed).toBe(false)
+	})
+
+	it('serves a short owned body with the assumed content-type pinned', async () => {
+		const app = new Elysia().use(compress()).get('/', () => 'tiny')
+		const response = await request(app, '/', 'gzip')
+
+		expect(response.headers.get('content-encoding')).toBeNull()
+		expect(response.headers.get('content-type')).toBe(
+			'text/plain;charset=utf-8'
+		)
+		expect(await response.text()).toBe('tiny')
+	})
+
+	it('serves an owned binary body byte-identical without compressing it', async () => {
+		const bytes = new Uint8Array(2048).fill(65)
+		bytes[10] = 0 // NUL byte trips the binary sniff
+
+		const app = new Elysia().use(compress()).get('/', () => bytes)
+		const response = await request(app, '/', 'gzip')
+
+		expect(response.headers.get('content-encoding')).toBeNull()
+		const received = new Uint8Array(await response.arrayBuffer())
+		expect(received).toEqual(bytes)
 	})
 
 	it('does not touch WebSocket messages', async () => {

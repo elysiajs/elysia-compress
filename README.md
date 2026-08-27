@@ -29,7 +29,7 @@ client can change the order with `Accept-Encoding` quality values.
 compress({
     encodings: ['br', 'zstd', 'gzip'],
     threshold: 1024,
-    streams: true,
+    stream: true,
     types: (type) => type.startsWith('text/'),
     options: {
         gzip: { level: 6 }
@@ -42,7 +42,7 @@ compress({
 | `default` | `true` | Compress every route by default. Set to `false` to compress only routes that opt in with the `compress` macro. |
 | `encodings` | `['br', 'zstd', 'gzip', 'deflate']` | Server preference order. Unsupported codecs are removed. |
 | `threshold` | `1024` | Minimum size for known or buffered bodies. |
-| `streams` | `true` | Compress chunked responses. |
+| `stream` | `true` | Compress chunked responses. |
 | `types` | Common text and web formats | Receives a lowercase content type without parameters. |
 | `options` | `{}` | Per-encoding Brotli, Zstandard, gzip, or deflate options. |
 
@@ -63,16 +63,27 @@ The plugin does not compress:
 - responses with `Cache-Control: no-transform`
 - server-sent events
 - content types rejected by `types`
-- chunked responses when `streams` is `false`
+- chunked responses when `stream` is `false`
 
 Compressed responses get `Content-Encoding` and `Vary: Accept-Encoding`.
 The plugin removes stale length and range headers and weakens strong ETags.
-Buffered responses use a cloned body so a handler can safely reuse a cached
-`Response`.
+
+The plugin consumes a buffered response's body directly instead of cloning
+it, for speed. If a handler reuses the same `Response` instance across
+requests, hand it out as `cached.clone()` on every request, or mark the
+retained instance once with Elysia's `borrow()` (`import { borrow } from
+'elysia'`) so core clones it per request instead. An unmarked, reused
+`Response` whose body has already been read fails loudly with core's
+"Cannot reuse a consumed Response across requests" error on the next
+request — it does not silently serve stale or corrupted content.
 
 `threshold` cannot predict the final size of a live stream, so it applies only
 to a declared `Content-Length` or a buffered body. Streaming compression has no
 `Content-Length`; buffered bodies use one-shot compression.
+Buffered bodies larger than 1 MiB are compressed through the streaming codec
+instead of the blocking one-shot, to keep the event loop responsive; the
+response stays correct, and total time for that single response may be
+marginally higher.
 
 The plugin uses `app.wrap()`. Any wrapper disables Elysia static response
 promotion for the app because the final response now depends on each request.

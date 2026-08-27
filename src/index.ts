@@ -1,4 +1,5 @@
 import { Elysia } from 'elysia'
+import { isBorrowedResponse } from 'elysia/adapter/response-ownership'
 import {
 	codecs,
 	load,
@@ -42,8 +43,10 @@ export interface CompressOptions {
 
 	/**
 	 * Compress chunked responses
+	 *
+	 * @default true
 	 **/
-	streams?: boolean
+	stream?: boolean
 
 	/**
 	 * per-encoding compression options
@@ -58,6 +61,8 @@ export interface CompressOptions {
 
 const DEFAULT_ENCODINGS: CompressEncoding[] = ['br', 'zstd', 'gzip', 'deflate']
 const NUL_SNIFF_LIMIT = 1024
+const NO_TRANSFORM = /no-transform/i
+const ONE_SHOT_LIMIT = 1 << 20
 
 const ASSUMED_TYPE =
 	new Response('').headers.get('content-type') === null
@@ -67,22 +72,22 @@ const ASSUMED_TYPE =
 const defaultCompressible = (type: string) =>
 	type.startsWith('text/') ||
 	type === 'application/json' ||
-	type.endsWith('+json') ||
-	type.includes('javascript') ||
-	type === 'application/xml' ||
-	type.endsWith('+xml') ||
-	type === 'application/wasm'
+	type.endsWith('+json') // ||
+// type.includes('javascript') ||
+// type === 'application/xml' ||
+// type.endsWith('+xml') ||
+// type === 'application/wasm'
 
-const normalizeType = (value: string) =>
-	value.split(';', 1)[0].trim().toLowerCase()
+const normalizeType = (value: string) => {
+	const separator = value.indexOf(';')
 
-const looksBinary = (bytes: Uint8Array) => {
-	const end = Math.min(bytes.byteLength, NUL_SNIFF_LIMIT)
-
-	for (let i = 0; i < end; i++) if (bytes[i] === 0) return true
-
-	return false
+	return (separator === -1 ? value : value.slice(0, separator))
+		.trim()
+		.toLowerCase()
 }
+
+const looksBinary = (bytes: Uint8Array) =>
+	bytes.subarray(0, NUL_SNIFF_LIMIT).indexOf(0) !== -1
 
 const varyWithAcceptEncoding = (headers: Headers) => {
 	const vary = headers.get('vary')
@@ -193,30 +198,35 @@ export const compress = (options: CompressOptions = {}) => {
 	const threshold = options.threshold ?? 1024
 	const byDefault = options.default !== false
 	const compressible = options.types ?? defaultCompressible
-	const allowStreams = options.streams !== false
+	const allowStreams = options.stream !== false
 	const available = (options.encodings ?? DEFAULT_ENCODINGS).filter(
 		(encoding) => codecs[encoding]
 	)
 
 	const perRoute = new WeakMap<Request, boolean>()
+	const negotiated = new Map<string, string | null>()
 
-	const apply = (
-		request: Request,
-		response: Response
-	) => {
+	const apply = (request: Request, response: Response) => {
 		const route = perRoute.get(request)
 
 		if (route === false || (!byDefault && route !== true)) return response
 		if (request.method === 'HEAD' || !(response instanceof Response))
 			return response
-		if ([204, 205, 206, 304].includes(response.status)) return response
+
+		const status = response.status
+		if (
+			status === 204 ||
+			status === 205 ||
+			status === 206 ||
+			status === 304
+		)
+			return response
 
 		const headers = response.headers
-
 		if (headers.has('content-encoding')) return response
-		if (
-			headers.get('cache-control')?.toLowerCase().includes('no-transform')
-		)
+
+		const cacheControl = headers.get('cache-control')
+		if (cacheControl !== null && NO_TRANSFORM.test(cacheControl))
 			return response
 
 		const declaredType = headers.get('content-type')
@@ -236,19 +246,32 @@ export const compress = (options: CompressOptions = {}) => {
 
 		if (streaming && !allowStreams) return response
 
-		const encoding = negotiate(
-			request.headers.get('accept-encoding'),
-			available
-		) as CompressEncoding | null
+		const acceptEncoding = request.headers.get('accept-encoding')
+		let encoding: CompressEncoding | null
+
+		if (acceptEncoding === null) encoding = null
+		else {
+			const cached = negotiated.get(acceptEncoding)
+
+			if (cached !== undefined)
+				encoding = cached as CompressEncoding | null
+			else {
+				encoding = negotiate(
+					acceptEncoding,
+					available
+				) as CompressEncoding | null
+
+				// ponytail: bounded, clear-on-full beats LRU bookkeeping here
+				if (negotiated.size >= 500) negotiated.clear()
+				negotiated.set(acceptEncoding, encoding)
+			}
+		}
 
 		if (encoding === null) return withVary(response)
 
+		// content-length is guarded by runtime
 		const declaredLength = Number(headers.get('content-length'))
-		if (
-			headers.has('content-length') &&
-			Number.isFinite(declaredLength) &&
-			declaredLength < threshold
-		)
+		if (headers.has('content-length') && declaredLength < threshold)
 			return withVary(response)
 
 		if (response.body === null) return response
@@ -270,30 +293,45 @@ export const compress = (options: CompressOptions = {}) => {
 				new Headers(response.headers)
 			)
 
-		let cloned: Response
+		const owned = !isBorrowedResponse(response)
+		const rebuildOwnedBytes = (bytes: Uint8Array) =>
+			new Response(bytes as BodyInit, {
+				status: response.status,
+				statusText: response.statusText,
+				headers: response.headers
+			})
 
-		try {
-			cloned = response.clone()
-		} catch {
-			return response
-		}
+		let source: Response
 
-		return cloned
+		if (owned || !response.bodyUsed) source = response
+		else return response
+
+		return source
 			.arrayBuffer()
 			.then((buffer) => {
 				const bytes = new Uint8Array(buffer)
 
-				if (!declaredType && looksBinary(bytes)) return response
-				if (bytes.byteLength < threshold) return withVary(response)
+				if (!declaredType && looksBinary(bytes))
+					return owned ? rebuildOwnedBytes(bytes) : response
+
+				if (bytes.byteLength < threshold) {
+					if (!owned) return withVary(response)
+
+					const bailout = rebuildOwnedBytes(bytes)
+					if (!declaredType && ASSUMED_TYPE)
+						bailout.headers.set('content-type', ASSUMED_TYPE)
+
+					return withVary(bailout)
+				}
 
 				const oneShot = oneShots[encoding] as
 					| OneShot<CompressEncoding>
 					| undefined
 
-				if (oneShot)
+				if (oneShot && bytes.byteLength <= ONE_SHOT_LIMIT)
 					return rebuild(
 						oneShot(bytes, options.options?.[encoding]),
-						cloned.headers
+						source.headers
 					)
 
 				return rebuild(
@@ -301,15 +339,15 @@ export const compress = (options: CompressOptions = {}) => {
 						new Response(bytes).body!,
 						codec(options.options?.[encoding])
 					),
-					cloned.headers
+					source.headers
 				)
 			})
 			.catch(() => response)
 	}
 
 	return new Elysia({ name: '@elysia/compress' })
-		.wrap((handle) => (request, ...rest) => {
-			const response = handle(request, ...rest)
+		.wrap((handle) => (request, server) => {
+			const response = handle(request, server)
 
 			return response instanceof Promise
 				? response.then((resolved) => apply(request, resolved))

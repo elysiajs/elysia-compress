@@ -1,0 +1,13 @@
+@elysia/compress bench — baseline (before P1-P6)
+Bun 1.4.0, Darwin arm64, Thu Aug 27 22:58:38 +07 2026
+
+
+scenario                                  ops/sec
+--------------------------------------------------------
+a) skip (image/png passthrough)           395,824
+b) buffered gzip (2KB json)               38,621
+c) buffered zstd (60KB json)              21,001
+d) under-threshold (100B text, withVary)  58,827
+e) negotiate() isolated                   2,902,758
+
+heap delta after 20,000 extra iterations of (b), post-gc: +3755.9 KB

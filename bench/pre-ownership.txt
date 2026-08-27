@@ -1,0 +1,13 @@
+@elysia/compress bench — pre-ownership (current tree before isOwnedResponse integration)
+Bun 1.4.0, Darwin arm64, Fri Aug 28 00:00:12 +07 2026
+
+
+scenario                                  ops/sec
+--------------------------------------------------------
+a) skip (image/png passthrough)           400,725
+b) buffered gzip (2KB json)               37,350
+c) buffered zstd (60KB json)              18,687
+d) under-threshold (100B text, withVary)  55,030
+e) negotiate() isolated                   2,761,157
+
+heap delta after 20,000 extra iterations of (b), post-gc: +3758.2 KB

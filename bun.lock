@@ -7,12 +7,12 @@
       "devDependencies": {
         "@elysia/static": "^2.0.0-beta.2",
         "@types/bun": "^1.4.0",
-        "elysia": "2.0.0-beta.6",
+        "elysia": "2.0.0-beta.8",
         "tsdown": "^0.22.3",
         "typescript": "^5.9.3",
       },
       "peerDependencies": {
-        "elysia": ">= 2.0.0-beta.5",
+        "elysia": ">= 2.0.0-beta.8",
       },
     },
   },
@@ -127,7 +127,7 @@
 
     "dts-resolver": ["dts-resolver@3.0.0", "", { "peerDependencies": { "oxc-resolver": ">=11.0.0" }, "optionalPeers": ["oxc-resolver"] }, "sha512-1T1f+z+4tl9XD+m+0HBgWoL/nm0bOIffyWaUuUSBlFg/86IWvfx+wjNaO/ybU0AJzG9/Mi5hBUgGV6zCmWEN7Q=="],
 
-    "elysia": ["elysia@2.0.0-beta.6", "", { "dependencies": { "deuri": "^3.0.0", "memoirist": "1.2.2" }, "peerDependencies": { "@types/bun": ">= 1.3.0", "exact-mirror": ">= 1.2.2", "openapi-types": ">= 12.0.0", "typebox": ">= 1.3.0", "typescript": ">= 5.7.0" }, "optionalPeers": ["@types/bun", "openapi-types", "typescript"] }, "sha512-MUZ2Vd36dQGGqjp5y9c5OQjbWJUU6S3BVE97DcwnqBmVv0wbLSX90DwQZ7Dp3vRoHZJFqEgi9TMFvm8A6bu9Mg=="],
+    "elysia": ["elysia@2.0.0-beta.8", "", { "dependencies": { "deuri": "^3.0.0", "memoirist": "1.2.2" }, "peerDependencies": { "@types/bun": ">= 1.3.0", "exact-mirror": ">= 1.2.2", "openapi-types": ">= 12.0.0", "typebox": ">= 1.3.0", "typescript": ">= 5.7.0" }, "optionalPeers": ["@types/bun", "openapi-types", "typescript"] }, "sha512-DrYPIxNpgSgtU6rU8EbFdbq2NXc6AliDF8IhXwazQJXhiRU0ErevDe5tsFoz/02/OHI6oclvKRBo3JiibQYFcA=="],
 
     "empathic": ["empathic@2.0.1", "", {}, "sha512-YGRs8knHhKHVShLkFET/rWAU8kmHbOV5LwN938RHI0pljAJ1Gf6SzXsSmRaEzcXTtOOmVqJ5+WtQPL5uigY50Q=="],
 
