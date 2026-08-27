@@ -1,5 +1,4 @@
-import { Elysia } from 'elysia/base'
-
+import { Elysia } from 'elysia'
 import {
 	codecs,
 	load,
