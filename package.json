@@ -19,7 +19,7 @@
     "devDependencies": {
         "@elysia/static": "^2.0.0-beta.2",
         "@types/bun": "^1.4.0",
-        "elysia": "2.0.0-beta.8",
+        "elysia": "2.0.0-exp.64",
         "tsdown": "^0.22.3",
         "typescript": "^5.9.3"
     },
