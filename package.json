@@ -1,6 +1,6 @@
 {
     "name": "@elysia/compress",
-    "version": "2.0.0-beta.2",
+    "version": "2.0.0-rc.0",
     "description": "Elysia plugin for response compression",
     "license": "MIT",
     "files": [
@@ -14,12 +14,12 @@
         "release": "npm run build && npm run test && npm publish --access public"
     },
     "peerDependencies": {
-        "elysia": ">= 2.0.0-beta.8"
+        "elysia": ">= 2.0.0-rc.0"
     },
     "devDependencies": {
-        "@elysia/static": "^2.0.0-beta.2",
+        "@elysia/static": "^2.0.0-beta.3",
         "@types/bun": "^1.4.0",
-        "elysia": "2.0.0-beta.8",
+        "elysia": "2.0.0-rc.0",
         "tsdown": "^0.22.3",
         "typescript": "^5.9.3"
     },

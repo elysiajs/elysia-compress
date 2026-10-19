@@ -1,3 +1,8 @@
+
+# 2.0.0-rc.0 - 20 Oct 2026
+Change:
+- Add support for Elysia 2.0
+
 # Unreleased
 Feature:
 - cap one-shot buffered compression at 1 MiB; larger bodies compress through the streaming codec so the event loop stays responsive
