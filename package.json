@@ -21,7 +21,7 @@
         "@types/bun": "^1.4.0",
         "elysia": "2.0.0-rc.0",
         "tsdown": "^0.22.3",
-        "typescript": "^5.9.3"
+        "typescript": "^7.0.2"
     },
     "main": "./dist/index.js",
     "module": "./dist/index.mjs",
