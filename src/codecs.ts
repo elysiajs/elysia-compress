@@ -61,6 +61,12 @@ export type OneShot<Encoding extends CompressEncoding = CompressEncoding> = (
 	options?: OptionsByEncoding[Encoding]
 ) => Uint8Array
 
+export type AsyncOneShot<Encoding extends CompressEncoding = CompressEncoding> =
+	(
+		data: Uint8Array,
+		options?: OptionsByEncoding[Encoding]
+	) => Promise<Uint8Array>
+
 const codecs: Partial<{
 	[Encoding in CompressEncoding]: Codec<Encoding>
 }> = {}
@@ -68,6 +74,17 @@ const codecs: Partial<{
 const oneShots: Partial<{
 	[Encoding in CompressEncoding]: OneShot<Encoding>
 }> = {}
+
+const asyncOneShots: Partial<{
+	[Encoding in CompressEncoding]: AsyncOneShot<Encoding>
+}> = {}
+
+const names = {
+	gzip: 'gzip',
+	deflate: 'deflate',
+	br: 'brotliCompress',
+	zstd: 'zstdCompress'
+} as const
 
 let loaded = false
 
@@ -81,8 +98,7 @@ export const load = () => {
 	const toWeb = Duplex?.toWeb as
 		| ((duplex: any) => ReadableWritablePair<Uint8Array, Uint8Array>)
 		| undefined
-	const hasCompressionStream =
-		typeof runtime.CompressionStream === 'function'
+	const hasCompressionStream = typeof runtime.CompressionStream === 'function'
 
 	for (const encoding of ['gzip', 'deflate'] as const) {
 		const create =
@@ -90,7 +106,9 @@ export const load = () => {
 
 		if (create && toWeb)
 			codecs[encoding] = (options) =>
-				toWeb(create({ ...options, flush: zlib.constants.Z_SYNC_FLUSH }))
+				toWeb(
+					create({ ...options, flush: zlib.constants.Z_SYNC_FLUSH })
+				)
 		else if (hasCompressionStream)
 			codecs[encoding] = () => new runtime.CompressionStream(encoding)
 	}
@@ -124,34 +142,60 @@ export const load = () => {
 			)
 
 	if (zlib) {
-		oneShots.gzip = (data, options) =>
-			options === undefined && runtime.Bun?.gzipSync
-				? runtime.Bun.gzipSync(data)
-				: zlib.gzipSync(data, options)
-
-		oneShots.deflate = (data, options) => zlib.deflateSync(data, options)
-
 		const { BROTLI_PARAM_QUALITY, BROTLI_PARAM_SIZE_HINT } = zlib.constants
-
-		oneShots.br = (data, options = {}) => {
-			const { params, ...rest } = options
-
-			return zlib.brotliCompressSync(data, {
+		const oneShotOptions = (
+			encoding: CompressEncoding,
+			data: Uint8Array,
+			options?: OptionsByEncoding[CompressEncoding]
+		) => {
+			if (encoding !== 'br') return options
+			const { params, ...rest } = (options ?? {}) as BrotliOptions
+			return {
 				...rest,
 				params: {
 					[BROTLI_PARAM_QUALITY]: 4,
 					[BROTLI_PARAM_SIZE_HINT]: data.byteLength,
 					...params
 				}
-			})
+			}
 		}
 
-		if (zlib.zstdCompressSync)
-			oneShots.zstd = (data, options) =>
-				options === undefined && runtime.Bun?.zstdCompressSync
-					? runtime.Bun.zstdCompressSync(data)
-					: zlib.zstdCompressSync(data, options)
+		for (const encoding of Object.keys(names) as CompressEncoding[]) {
+			const name = names[encoding]
+
+			if (typeof zlib[`${name}Sync`] === 'function')
+				oneShots[encoding] = (data, options) => {
+					if (options) {
+						if (encoding === 'gzip' && runtime.Bun?.gzipSync)
+							return runtime.Bun.gzipSync(data)
+
+						if (
+							encoding === 'zstd' &&
+							runtime.Bun?.zstdCompressSync
+						)
+							return runtime.Bun.zstdCompressSync(data)
+					}
+
+					return zlib[`${name}Sync`](
+						data,
+						oneShotOptions(encoding, data, options)
+					)
+				}
+
+			if (typeof zlib[name] === 'function')
+				asyncOneShots[encoding] = (data, options) =>
+					new Promise((resolve, reject) => {
+						zlib[name](
+							data,
+							oneShotOptions(encoding, data, options),
+							(error: Error | null, result: Uint8Array) => {
+								if (error) reject(error)
+								else resolve(result)
+							}
+						)
+					})
+		}
 	}
 }
 
-export { codecs, oneShots }
+export { asyncOneShots, codecs, oneShots }

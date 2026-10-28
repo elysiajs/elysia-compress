@@ -16,3 +16,11 @@ await build({
 		}
 	}
 })
+
+const declarations = await Bun.file('dist/index.d.ts').text()
+if (
+	/node:|\bBuffer\b|\bNodeJS\b|["'](?:zlib|stream)["']|types="node"/.test(
+		declarations
+	)
+)
+	throw new Error('Public declarations must not expose Node.js types')

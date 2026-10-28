@@ -1,10 +1,12 @@
 import { Elysia } from 'elysia'
 import { isBorrowedResponse } from 'elysia/adapter/response-ownership'
 import {
+	asyncOneShots,
 	codecs,
 	load,
 	oneShots,
 	type BrotliOptions,
+	type AsyncOneShot,
 	type Codec,
 	type CompressEncoding,
 	type OneShot,
@@ -59,7 +61,7 @@ export interface CompressOptions {
 	}
 }
 
-const DEFAULT_ENCODINGS: CompressEncoding[] = ['br', 'zstd', 'gzip', 'deflate']
+const DEFAULT_ENCODINGS: CompressEncoding[] = ['zstd', 'br', 'gzip', 'deflate']
 const NUL_SNIFF_LIMIT = 1024
 const NO_TRANSFORM = /no-transform/i
 const ONE_SHOT_LIMIT = 1 << 20
@@ -301,14 +303,22 @@ export const compress = (options: CompressOptions = {}) => {
 				headers: response.headers
 			})
 
+		const byteBailout = (bytes: Uint8Array) => {
+			const bailout = rebuildOwnedBytes(bytes)
+
+			if (!declaredType && ASSUMED_TYPE)
+				bailout.headers.set('content-type', ASSUMED_TYPE)
+
+			return withVary(bailout)
+		}
+
 		let source: Response
 
 		if (owned || !response.bodyUsed) source = response
 		else return response
 
-		return source
-			.arrayBuffer()
-			.then((buffer) => {
+		return source.arrayBuffer().then(
+			(buffer) => {
 				const bytes = new Uint8Array(buffer)
 
 				if (!declaredType && looksBinary(bytes))
@@ -317,21 +327,35 @@ export const compress = (options: CompressOptions = {}) => {
 				if (bytes.byteLength < threshold) {
 					if (!owned) return withVary(response)
 
-					const bailout = rebuildOwnedBytes(bytes)
-					if (!declaredType && ASSUMED_TYPE)
-						bailout.headers.set('content-type', ASSUMED_TYPE)
-
-					return withVary(bailout)
+					return byteBailout(bytes)
 				}
 
 				const oneShot = oneShots[encoding] as
 					| OneShot<CompressEncoding>
 					| undefined
 
-				if (oneShot && bytes.byteLength <= ONE_SHOT_LIMIT)
-					return rebuild(
-						oneShot(bytes, options.options?.[encoding]),
-						source.headers
+				if (oneShot && bytes.byteLength <= ONE_SHOT_LIMIT) {
+					try {
+						return rebuild(
+							oneShot(bytes, options.options?.[encoding]),
+							source.headers
+						)
+					} catch {
+						return byteBailout(bytes)
+					}
+				}
+
+				const asyncOneShot = asyncOneShots[encoding] as
+					| AsyncOneShot<CompressEncoding>
+					| undefined
+
+				if (asyncOneShot)
+					return asyncOneShot(
+						bytes,
+						options.options?.[encoding]
+					).then(
+						(out) => rebuild(out, source.headers),
+						() => byteBailout(bytes)
 					)
 
 				return rebuild(
@@ -341,8 +365,9 @@ export const compress = (options: CompressOptions = {}) => {
 					),
 					source.headers
 				)
-			})
-			.catch(() => response)
+			},
+			() => response
+		)
 	}
 
 	return new Elysia({ name: '@elysia/compress' })

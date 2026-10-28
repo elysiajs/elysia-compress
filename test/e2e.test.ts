@@ -13,6 +13,15 @@ type Handleable = {
 }
 
 const body = 'hello elysia '.repeat(300)
+const row =
+	JSON.stringify({
+		id: 12345,
+		name: 'compression fixture',
+		values: [1, 2, 3, 4, 5],
+		active: true
+	}) + '\n'
+const smallBody = row.repeat(Math.floor(((1 << 20) - 1) / row.length))
+const largeBody = row.repeat(Math.ceil(((1 << 20) + 1) / row.length))
 
 const request = (
 	app: Handleable,
@@ -117,9 +126,18 @@ describe('compress', () => {
 		expect(await decode(response)).toBe(body)
 	})
 
-	it('prefers br to zstd by default', async () => {
+	// zstd is several times faster than br at a similar ratio
+	it('prefers zstd to br by default', async () => {
 		const app = new Elysia().use(compress()).get('/', () => body)
-		const response = await request(app, '/', 'zstd, br')
+		const response = await request(app, '/', 'br, zstd')
+
+		expect(response.headers.get('content-encoding')).toBe('zstd')
+		expect(await decode(response)).toBe(body)
+	})
+
+	it('falls back to br for clients without zstd', async () => {
+		const app = new Elysia().use(compress()).get('/', () => body)
+		const response = await request(app, '/', 'gzip, deflate, br')
 
 		expect(response.headers.get('content-encoding')).toBe('br')
 		expect(await decode(response)).toBe(body)
@@ -640,17 +658,96 @@ describe('compress', () => {
 		expect(await decode(response)).toBe(body)
 	})
 
-	// Pins that oversized buffered bodies still compress correctly through
-	// the streaming lane instead of the blocking one-shot: past
-	// ONE_SHOT_LIMIT, oneShots is skipped even when available and the
-	// existing pipe-from-bytes path takes over.
-	it('compresses an oversized buffered body through the streaming lane', async () => {
-		const large = 'a'.repeat(2 * 1024 * 1024)
-		const app = new Elysia().use(compress()).get('/', () => large)
-		const response = await request(app, '/', 'gzip')
+	it('round trips oversized buffered bodies with each codec', async () => {
+		const app = new Elysia().use(compress()).get('/', () => largeBody)
+		for (const encoding of ['zstd', 'br', 'gzip', 'deflate']) {
+			const response = await request(app, '/', encoding)
+			expect(response.headers.get('content-encoding')).toBe(encoding)
+			expect(await decode(response)).toBe(largeBody)
+		}
+	})
 
-		expect(response.headers.get('content-encoding')).toBe('gzip')
-		expect(await decode(response)).toBe(large)
+	it('keeps oversized compression off the event loop', async () => {
+		for (const [content, expected] of [
+			[smallBody, true],
+			[largeBody, false]
+		] as const) {
+			const app = new Elysia().use(compress()).get('/', () => content)
+			let settled = false
+			const pending = request(app, '/', 'gzip').then((response) =>
+				response.arrayBuffer()
+			)
+			pending.finally(() => {
+				settled = true
+			}).catch(() => {})
+			// Large compression must let other event-loop work proceed.
+			for (let i = 0; i < 1000 && !settled; i++) await null
+			expect(settled).toBe(expected)
+			expect(zlib.gunzipSync(Buffer.from(await pending)).toString()).toBe(
+				content
+			)
+		}
+	})
+
+	it('serves original bytes when buffered compression exceeds its output limit', async () => {
+		for (const content of [smallBody, largeBody]) {
+			const app = new Elysia()
+				.use(compress({ options: { gzip: { maxOutputLength: 16 } } }))
+				.get('/', () => content)
+			const response = await request(app, '/', 'gzip')
+			expect(response.status).toBe(200)
+			expect(response.headers.get('content-encoding')).toBeNull()
+			expect(response.headers.get('vary')).toContain('Accept-Encoding')
+			expect(response.headers.get('content-type')).toBe(
+				'text/plain;charset=utf-8'
+			)
+			expect(await response.text()).toBe(content)
+		}
+	})
+
+	it('pins Brotli quality for oversized bodies', async () => {
+		const app = new Elysia().use(compress()).get('/', () => largeBody)
+		const response = await request(app, '/', 'br')
+		const output = await response.arrayBuffer()
+		const expected = zlib.brotliCompressSync(Buffer.from(largeBody), {
+			params: {
+				[zlib.constants.BROTLI_PARAM_QUALITY]: 4,
+				[zlib.constants.BROTLI_PARAM_SIZE_HINT]: Buffer.byteLength(largeBody)
+			}
+		})
+		expect(output.byteLength).toBe(expected.byteLength)
+		expect(output.byteLength).not.toBe(
+			zlib.brotliCompressSync(Buffer.from(largeBody), {
+				params: {
+					[zlib.constants.BROTLI_PARAM_QUALITY]: 11,
+					[zlib.constants.BROTLI_PARAM_SIZE_HINT]:
+						Buffer.byteLength(largeBody)
+				}
+			}).byteLength
+		)
+		expect(zlib.brotliDecompressSync(Buffer.from(output)).toString()).toBe(
+			largeBody
+		)
+	})
+
+	it('honors gzip options for oversized bodies', async () => {
+		const app = new Elysia()
+			.use(compress({
+				options: { gzip: { level: 9 } }
+			}))
+			.get('/', () => largeBody)
+		const response = await request(app, '/', 'gzip')
+		const output = await response.arrayBuffer()
+		const expected = zlib.gzipSync(Buffer.from(largeBody), {
+			level: 9
+		})
+		expect(output.byteLength).toBe(expected.byteLength)
+		expect(output.byteLength).not.toBe(
+			zlib.gzipSync(Buffer.from(largeBody)).byteLength
+		)
+		expect(zlib.gunzipSync(Buffer.from(output)).toString()).toBe(
+			largeBody
+		)
 	})
 
 	// A `.wrap()` registered after compress() composes closer to the handler

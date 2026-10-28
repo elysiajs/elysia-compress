@@ -40,7 +40,7 @@ compress({
 | Option | Default | Meaning |
 | --- | --- | --- |
 | `default` | `true` | Compress every route by default. Set to `false` to compress only routes that opt in with the `compress` macro. |
-| `encodings` | `['br', 'zstd', 'gzip', 'deflate']` | Server preference order. Unsupported codecs are removed. |
+| `encodings` | `['zstd', 'br', 'gzip', 'deflate']` | Server preference order. Unsupported codecs are removed. |
 | `threshold` | `1024` | Minimum size for known or buffered bodies. |
 | `stream` | `true` | Compress chunked responses. |
 | `types` | Common text and web formats | Receives a lowercase content type without parameters. |
@@ -80,10 +80,9 @@ request — it does not silently serve stale or corrupted content.
 `threshold` cannot predict the final size of a live stream, so it applies only
 to a declared `Content-Length` or a buffered body. Streaming compression has no
 `Content-Length`; buffered bodies use one-shot compression.
-Buffered bodies larger than 1 MiB are compressed through the streaming codec
-instead of the blocking one-shot, to keep the event loop responsive; the
-response stays correct, and total time for that single response may be
-marginally higher.
+Buffered bodies larger than 1 MiB use zlib's async one-shot compression off
+the event loop. If compression fails, such as when `maxOutputLength` is
+exceeded, the plugin serves the original bytes uncompressed.
 
 The plugin uses `app.wrap()`. Any wrapper disables Elysia static response
 promotion for the app because the final response now depends on each request.

@@ -27,6 +27,69 @@ const decoded = zlib
 
 if (decoded !== body) throw new Error('Node gzip round trip failed')
 
+const largeBody = (
+	JSON.stringify({
+		id: 12345,
+		name: 'compression fixture',
+		values: [1, 2, 3, 4, 5],
+		active: true
+	}) + '\n'
+).repeat(15000)
+const largeApp = new Elysia().use(compress()).get('/', () => largeBody)
+for (const [encoding, decompress] of [
+	['zstd', zlib.zstdDecompressSync],
+	['br', zlib.brotliDecompressSync],
+	['gzip', zlib.gunzipSync],
+	['deflate', zlib.inflateSync]
+]) {
+	if (!decompress) continue
+	const response = await largeApp.handle(
+		new Request('http://localhost/', {
+			headers: { 'accept-encoding': encoding }
+		})
+	)
+	if (response.headers.get('content-encoding') !== encoding)
+		throw new Error(`Node ${encoding} compression failed`)
+	if (
+		decompress(Buffer.from(await response.arrayBuffer())).toString() !==
+		largeBody
+	)
+		throw new Error(`Node ${encoding} round trip failed`)
+}
+
+const limitedApp = new Elysia()
+	.use(compress({ options: { gzip: { maxOutputLength: 16 } } }))
+	.get('/', () => largeBody)
+const limited = await limitedApp.handle(
+	new Request('http://localhost/', {
+		headers: { 'accept-encoding': 'gzip' }
+	})
+)
+if (
+	limited.status !== 200 ||
+	limited.headers.has('content-encoding') ||
+	!limited.headers.get('vary')?.includes('Accept-Encoding') ||
+	(await limited.text()) !== largeBody
+)
+	throw new Error('Node oversized compression fallback failed')
+
+const levelApp = new Elysia()
+	.use(compress({ options: { gzip: { level: 1 } } }))
+	.get('/', () => largeBody)
+const levelResponse = await levelApp.handle(
+	new Request('http://localhost/', {
+		headers: { 'accept-encoding': 'gzip' }
+	})
+)
+const levelOutput = Buffer.from(await levelResponse.arrayBuffer())
+const expectedLevel = zlib.gzipSync(Buffer.from(largeBody), { level: 1 })
+if (
+	levelOutput.length !== expectedLevel.length ||
+	levelOutput.length === zlib.gzipSync(Buffer.from(largeBody)).length ||
+	zlib.gunzipSync(levelOutput).toString() !== largeBody
+)
+	throw new Error('Node oversized gzip level failed')
+
 const bytes = await app.handle(
 	new Request('http://localhost/bytes', {
 		headers: { 'accept-encoding': 'gzip' }

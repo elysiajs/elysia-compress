@@ -1,6 +1,6 @@
 {
     "name": "@elysia/compress",
-    "version": "2.0.0-rc.0",
+    "version": "2.0.0-rc.1",
     "description": "Elysia plugin for response compression",
     "license": "MIT",
     "files": [
@@ -17,7 +17,7 @@
         "elysia": ">= 2.0.0-rc.0"
     },
     "devDependencies": {
-        "@elysia/static": "^2.0.0-beta.3",
+        "@elysia/static": "^2.0.0-rc.0",
         "@types/bun": "^1.4.0",
         "elysia": "2.0.0-rc.0",
         "tsdown": "^0.22.3",
