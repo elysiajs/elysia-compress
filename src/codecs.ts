@@ -98,6 +98,7 @@ export const load = () => {
 	const toWeb = Duplex?.toWeb as
 		| ((duplex: any) => ReadableWritablePair<Uint8Array, Uint8Array>)
 		| undefined
+
 	const hasCompressionStream = typeof runtime.CompressionStream === 'function'
 
 	for (const encoding of ['gzip', 'deflate'] as const) {
@@ -165,7 +166,8 @@ export const load = () => {
 
 			if (typeof zlib[`${name}Sync`] === 'function')
 				oneShots[encoding] = (data, options) => {
-					if (options) {
+					// Bun natives take no options; use them only for defaults
+					if (options === undefined) {
 						if (encoding === 'gzip' && runtime.Bun?.gzipSync)
 							return runtime.Bun.gzipSync(data)
 

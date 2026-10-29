@@ -173,6 +173,36 @@ describe('compress', () => {
 		expect(await decode(response)).toBe(body)
 	})
 
+	// Bun's native one-shots take no options, so they may only serve defaults
+	it('honors gzip and zstd options on the buffered one-shot', async () => {
+		const varied = Array.from({ length: 400 }, (_, i) =>
+			JSON.stringify({ id: i, name: 'user' + i, score: (i * 7919) % 1000 })
+		).join('\n')
+		const bytes = Buffer.from(varied)
+		const zstd = {
+			params: { [zlib.constants.ZSTD_c_compressionLevel]: 19 }
+		}
+		const app = new Elysia()
+			.use(compress({ options: { gzip: { level: 1 }, zstd } }))
+			.get('/', () => varied)
+
+		for (const [encoding, expected, byDefault] of [
+			['gzip', zlib.gzipSync(bytes, { level: 1 }), zlib.gzipSync(bytes)],
+			[
+				'zstd',
+				zlib.zstdCompressSync(bytes, zstd),
+				zlib.zstdCompressSync(bytes)
+			]
+		] as const) {
+			const response = await request(app, '/', encoding)
+			const output = await response.arrayBuffer()
+
+			expect(expected.byteLength).not.toBe(byDefault.byteLength)
+			expect(response.headers.get('content-encoding')).toBe(encoding)
+			expect(output.byteLength).toBe(expected.byteLength)
+		}
+	})
+
 	it('types options by encoding', () => {
 		compress({
 			options: {
